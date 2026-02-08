@@ -9,7 +9,7 @@ Interaktywna aplikacja webowa do symulacji propagacji promieni świetlnych przez
 ## Spis treści
 
 1. [O co chodzi w tej symulacji?](#o-co-chodzi-w-tej-symulacji)
-2. [Podstawy optyki — kluczowe pojęcia](#podstawy-optyki--kluczowe-pojęcia)
+2. [Podstawy optyki — kluczowe pojęcia](#podstawy-optyki-kluczowe-pojęcia)
 3. [Równanie soczewki cienkiej](#równanie-soczewki-cienkiej)
 4. [Trzy promienie główne](#trzy-promienie-główne)
 5. [Parametry symulacji](#parametry-symulacji)
