@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Symulacja Soczewek Optycznych</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#080810;color:#b0b0cc;
+  font-family:'Segoe UI',system-ui,sans-serif;
+  height:100vh;display:flex;flex-direction:column;
+  overflow:hidden;user-select:none;
+}
+#bar{
+  background:linear-gradient(180deg,#0e0e24,#0a0a1c);
+  border-bottom:1px solid #1a1a3a;
+  padding:10px 16px;display:flex;flex-wrap:wrap;
+  gap:10px 18px;align-items:center;
+}
+.g{display:flex;align-items:center;gap:6px}
+.g label{font-size:13px;color:#7778aa;font-weight:600;min-width:20px}
+.g input[type=range]{
+  width:110px;height:4px;-webkit-appearance:none;appearance:none;
+  background:#1c1c3a;border-radius:2px;outline:none;cursor:pointer;
+}
+.g input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;
+  background:#4488cc;border-radius:50%;border:2px solid #5599dd;cursor:pointer;
+}
+.g .v{font-size:11px;color:#5566aa;min-width:40px;text-align:right;font-variant-numeric:tabular-nums}
+.sep{width:1px;height:24px;background:#1a1a3a}
+.btn{
+  background:#161840;border:1px solid #252868;color:#7788bb;
+  padding:5px 12px;border-radius:4px;cursor:pointer;
+  font-size:11px;font-weight:600;transition:all .15s;
+}
+.btn:hover{background:#222460;color:#99aadd;border-color:#3344aa}
+.chk{display:flex;align-items:center;gap:5px;font-size:12px;color:#7778aa;cursor:pointer}
+.chk input{accent-color:#4488cc}
+#info{
+  margin-left:auto;font-size:11px;line-height:1.6;
+  color:#5566aa;text-align:right;white-space:nowrap;
+}
+canvas{flex:1;width:100%;display:block;cursor:crosshair}
+@media(max-width:900px){
+  .g input[type=range]{width:75px}
+  #info{width:100%;text-align:left;margin-left:0;font-size:10px}
+  .sep{display:none}
+}
+</style>
+</head>
+<body>
+<div id="bar">
+  <div class="g"><label>x</label><input type="range" id="sl-x" min="50" max="500" step="5" value="200"><span class="v" id="vx">200</span></div>
+  <div class="g"><label>d</label><input type="range" id="sl-d" min="30" max="500" step="5" value="200"><span class="v" id="vd">200</span></div>
+  <div class="g"><label>y</label><input type="range" id="sl-y" min="50" max="600" step="5" value="250"><span class="v" id="vy">250</span></div>
+  <div class="sep"></div>
+  <div class="g"><label>f₁</label><input type="range" id="sl-f1" min="-300" max="300" step="5" value="120"><span class="v" id="vf1">120</span></div>
+  <div class="g"><label>f₂</label><input type="range" id="sl-f2" min="-300" max="300" step="5" value="80"><span class="v" id="vf2">80</span></div>
+  <div class="sep"></div>
+  <label class="chk"><input type="checkbox" id="cb-chr">Aberracja chromatyczna</label>
+  <div class="sep"></div>
+  <button class="btn" id="p-norm">Zwyczajny przypadek</button>
+  <button class="btn" id="p-tele">Teleskop</button>
+  <span id="info"></span>
+</div>
+<canvas id="cv"></canvas>
+<script>
+(()=>{
+'use strict';
+const cv=document.getElementById('cv'),c=cv.getContext('2d'),info=document.getElementById('info');
+const P={x:200,y:250,d:200,f1:120,f2:80};
+const SH=40;
+let chr=false,CW,CH;
+
+/* --- sliders --- */
+const SK=['x','d','y','f1','f2'];
+const sl={},vl={};
+SK.forEach(k=>{
+  sl[k]=document.getElementById('sl-'+k);
+  vl[k]=document.getElementById('v'+k);
+  sl[k].addEventListener('input',()=>{
+    let v=+sl[k].value;
+    if((k==='f1'||k==='f2')&&v===0) v=5;
+    P[k]=v; vl[k].textContent=v; draw();
+  });
+});
+document.getElementById('cb-chr').addEventListener('change',e=>{chr=e.target.checked;draw()});
+
+function preset(o){for(let k in o){P[k]=o[k];sl[k].value=o[k];vl[k].textContent=o[k]}draw()}
+document.getElementById('p-norm').addEventListener('click',()=>preset({x:200,d:200,f1:120,f2:80,y:250}));
+document.getElementById('p-tele').addEventListener('click',()=>preset({x:500,d:225,f1:150,f2:75,y:300}));
+
+/* --- resize --- */
+function resize(){
+  const dpr=devicePixelRatio||1;
+  const bh=document.getElementById('bar').offsetHeight;
+  CW=innerWidth; CH=innerHeight-bh;
+  cv.width=CW*dpr; cv.height=CH*dpr;
+  cv.style.width=CW+'px'; cv.style.height=CH+'px';
+  c.setTransform(dpr,0,0,dpr,0,0);
+  draw();
+}
+addEventListener('resize',resize);
+
+/* --- coordinate transform --- */
+let ox,oy,sc;
+function setupView(pts){
+  const srcX=-P.x, scrX=P.d+P.y;
+  let x0=srcX-40, x1=scrX+40;
+  let y0=-90, y1=90;
+  // include focal points
+  x0=Math.min(x0,-P.f1-15, P.d-P.f2-15);
+  x1=Math.max(x1, P.f1+15, P.d+P.f2+15);
+  // include ray extents (clamped)
+  for(const p of pts){
+    const cy=Math.max(-350,Math.min(350,p.y));
+    if(cy-10<y0)y0=cy-10;
+    if(cy+10>y1)y1=cy+10;
+  }
+  if(y1-y0<180){const m=(y1+y0)/2;y0=m-90;y1=m+90;}
+  // padding
+  const px=(x1-x0)*0.07, py=(y1-y0)*0.10;
+  x0-=px;x1+=px;y0-=py;y1+=py;
+  const mx=(x0+x1)/2, my=(y0+y1)/2;
+  sc=Math.min(CW/(x1-x0), CH/(y1-y0));
+  ox=CW/2-mx*sc;
+  oy=CH/2+my*sc;
+}
+function ts(wx,wy){return[ox+wx*sc, oy-wy*sc]}
+
+/* --- ray tracing (paraxial thin lens) --- */
+function trace(sx,sy,m,f1,f2,endX){
+  const pts=[{x:sx,y:sy}];
+  let cm=m, cx=sx, cy=sy;
+  // Lens 1 at x=0
+  let dx=0-cx;
+  if(dx>0.1){cy+=cm*dx;cx=0;pts.push({x:0,y:cy});cm-=cy/f1;}
+  // Lens 2 at x=d
+  dx=P.d-cx;
+  if(dx>0.1){cy+=cm*dx;cx=P.d;pts.push({x:P.d,y:cy});cm-=cy/f2;}
+  // to end
+  dx=endX-cx;
+  cy+=cm*dx;
+  pts.push({x:endX,y:cy});
+  return pts;
+}
+
+function threeRays(sx,sy,f1,f2,endX){
+  const rays=[];
+  // 1: parallel to axis
+  rays.push(trace(sx,sy,0,f1,f2,endX));
+  // 2: through center of L1
+  rays.push(trace(sx,sy,-sy/(0-sx),f1,f2,endX));
+  // 3: aimed at front focal point of L1 (at x = -f1)
+  const den=-f1-sx;
+  if(Math.abs(den)>0.5){
+    rays.push(trace(sx,sy,-sy/den,f1,f2,endX));
+  }
+  return rays;
+}
+
+/* --- drawing helpers --- */
+function drawAxis(){
+  const srcX=-P.x, scrX=P.d+P.y;
+  const[ax,ay]=ts(srcX-60,0),[bx]=ts(scrX+60,0);
+  c.strokeStyle='#181833';c.lineWidth=1;c.setLineDash([6,4]);
+  c.beginPath();c.moveTo(ax,ay);c.lineTo(bx,ay);c.stroke();
+  c.setLineDash([]);
+}
+
+function drawLens(wx,f,label){
+  const hh=80; // half-height in world units
+  const[cx,ty]=ts(wx,hh);
+  const[,by]=ts(wx,-hh);
+  const[,my]=ts(wx,0);
+  const bulge=Math.min(16,Math.max(4,700/(Math.abs(f)+15)));
+  c.lineWidth=2;c.strokeStyle='#00c8a0';
+  if(f>0||f===0){
+    // converging: biconvex
+    c.fillStyle='rgba(0,200,160,0.06)';
+    c.beginPath();
+    c.moveTo(cx,ty);
+    c.quadraticCurveTo(cx+bulge,my,cx,by);
+    c.quadraticCurveTo(cx-bulge,my,cx,ty);
+    c.closePath();c.fill();c.stroke();
+    // arrowheads outward
+    const a=6;
+    c.lineWidth=1.5;c.beginPath();
+    c.moveTo(cx-a,ty+a*2);c.lineTo(cx,ty);c.lineTo(cx+a,ty+a*2);
+    c.moveTo(cx-a,by-a*2);c.lineTo(cx,by);c.lineTo(cx+a,by-a*2);
+    c.stroke();
+  } else {
+    // diverging: biconcave
+    c.fillStyle='rgba(0,200,160,0.04)';
+    const e=bulge*0.8;
+    c.beginPath();
+    c.moveTo(cx-e,ty);
+    c.lineTo(cx+e,ty);
+    c.quadraticCurveTo(cx,my,cx+e,by);
+    c.lineTo(cx-e,by);
+    c.quadraticCurveTo(cx,my,cx-e,ty);
+    c.closePath();c.fill();c.stroke();
+    // inward arrowheads
+    const a=5;
+    c.lineWidth=1.5;c.beginPath();
+    c.moveTo(cx-e-a,ty-a*1.5);c.lineTo(cx-e,ty);c.lineTo(cx-e+a,ty-a*1.5);
+    c.moveTo(cx+e-a,ty-a*1.5);c.lineTo(cx+e,ty);c.lineTo(cx+e+a,ty-a*1.5);
+    c.moveTo(cx-e-a,by+a*1.5);c.lineTo(cx-e,by);c.lineTo(cx-e+a,by+a*1.5);
+    c.moveTo(cx+e-a,by+a*1.5);c.lineTo(cx+e,by);c.lineTo(cx+e+a,by+a*1.5);
+    c.stroke();
+  }
+  // label
+  c.fillStyle='#00c8a0';c.font='bold 12px sans-serif';c.textAlign='center';
+  c.fillText(label,cx,ty-12);
+}
+
+function drawFocal(wx,label,col){
+  const[sx,sy]=ts(wx,0);
+  c.fillStyle=col;
+  c.beginPath();c.arc(sx,sy,3.5,0,Math.PI*2);c.fill();
+  c.font='10px sans-serif';c.textAlign='center';
+  c.fillText(label,sx,sy+15);
+}
+
+function drawSource(wx,wy){
+  const[sx,sy]=ts(wx,wy);
+  const[ax,ay]=ts(wx,0);
+  // arrow from axis to source
+  c.strokeStyle='rgba(255,170,50,0.5)';c.lineWidth=2;
+  c.beginPath();c.moveTo(ax,ay);c.lineTo(sx,sy);c.stroke();
+  // arrowhead
+  const angle=Math.atan2(ay-sy,ax-sx);
+  const al=8;
+  c.fillStyle='#ffaa33';c.beginPath();
+  c.moveTo(sx,sy);
+  c.lineTo(sx+al*Math.cos(angle+0.4),sy+al*Math.sin(angle+0.4));
+  c.lineTo(sx+al*Math.cos(angle-0.4),sy+al*Math.sin(angle-0.4));
+  c.closePath();c.fill();
+  // glow dot
+  c.save();c.shadowColor='#ff8800';c.shadowBlur=14;
+  c.fillStyle='#ffbb44';c.beginPath();c.arc(sx,sy,4,0,Math.PI*2);c.fill();
+  c.restore();
+  c.fillStyle='#fff';c.beginPath();c.arc(sx,sy,1.8,0,Math.PI*2);c.fill();
+}
+
+function drawScreen(wx){
+  const hh=110;
+  const[sx,ty]=ts(wx,hh);
+  const[,by]=ts(wx,-hh);
+  // screen body
+  c.strokeStyle='#3a3a5a';c.lineWidth=3;
+  c.beginPath();c.moveTo(sx,ty);c.lineTo(sx,by);c.stroke();
+  // hatching
+  c.strokeStyle='#1a1a2a';c.lineWidth=1;
+  for(let y=ty;y<by;y+=7){c.beginPath();c.moveTo(sx,y);c.lineTo(sx+6,y+6);c.stroke();}
+}
+
+function drawRayPath(pts,col,lw){
+  if(pts.length<2)return;
+  c.strokeStyle=col;c.lineWidth=lw;c.lineCap='round';
+  c.beginPath();
+  const[a,b]=ts(pts[0].x,pts[0].y);
+  c.moveTo(a,b);
+  for(let i=1;i<pts.length;i++){const[px,py]=ts(pts[i].x,pts[i].y);c.lineTo(px,py);}
+  c.stroke();
+}
+
+function drawDim(x1,x2,label){
+  // dimension line below axis
+  const yw=-70;
+  const[sx1,sy]=ts(x1,yw);
+  const[sx2]=ts(x2,yw);
+  if(Math.abs(sx2-sx1)<20)return;
+  c.strokeStyle='#1e1e3e';c.lineWidth=1;
+  c.beginPath();c.moveTo(sx1,sy);c.lineTo(sx2,sy);c.stroke();
+  // ticks
+  c.beginPath();
+  c.moveTo(sx1,sy-4);c.lineTo(sx1,sy+4);
+  c.moveTo(sx2,sy-4);c.lineTo(sx2,sy+4);
+  c.stroke();
+  // arrows
+  const d=sx2>sx1?1:-1;
+  c.beginPath();
+  c.moveTo(sx1,sy);c.lineTo(sx1+6*d,sy-3);c.moveTo(sx1,sy);c.lineTo(sx1+6*d,sy+3);
+  c.moveTo(sx2,sy);c.lineTo(sx2-6*d,sy-3);c.moveTo(sx2,sy);c.lineTo(sx2-6*d,sy+3);
+  c.stroke();
+  // label
+  c.fillStyle='#3a3a5e';c.font='11px sans-serif';c.textAlign='center';
+  c.fillText(label,(sx1+sx2)/2,sy-7);
+}
+
+function drawImageSpots(groups,scrX){
+  // draw spots where rays hit screen
+  groups.forEach(({rays,color})=>{
+    rays.forEach(r=>{
+      const last=r[r.length-1];
+      if(Math.abs(last.x-scrX)<1){
+        const[sx,sy]=ts(scrX,last.y);
+        c.globalAlpha=0.85;c.fillStyle=color;
+        c.beginPath();c.arc(sx,sy,3.5,0,Math.PI*2);c.fill();
+        c.globalAlpha=1;
+      }
+    });
+  });
+  // draw image bar connecting extreme points per source group
+  const topHits=[], botHits=[];
+  groups.forEach(({rays})=>{
+    rays.forEach(r=>{
+      const last=r[r.length-1];
+      // classify by whether source was above or below axis
+      const srcY=r[0].y;
+      if(srcY>0) topHits.push(last.y);
+      else botHits.push(last.y);
+    });
+  });
+  if(topHits.length>0 && botHits.length>0){
+    const tAvg=topHits.reduce((a,b)=>a+b,0)/topHits.length;
+    const bAvg=botHits.reduce((a,b)=>a+b,0)/botHits.length;
+    const[sx,sy1]=ts(scrX,tAvg);
+    const[,sy2]=ts(scrX,bAvg);
+    c.strokeStyle='rgba(255,200,100,0.3)';c.lineWidth=5;
+    c.beginPath();c.moveTo(sx,sy1);c.lineTo(sx,sy2);c.stroke();
+  }
+}
+
+/* --- info panel --- */
+function updateInfo(){
+  const do1=P.x;
+  if(Math.abs(do1)<1){info.textContent='Źródło na soczewce';return;}
+  if(Math.abs(do1-P.f1)<1){info.textContent='Obraz po L₁: nieskończoność';return;}
+  const di1=P.f1*do1/(do1-P.f1);
+  const m1=-di1/do1;
+  const do2=P.d-di1;
+  if(Math.abs(do2)<1){info.textContent='Obraz pośredni na L₂';return;}
+  if(Math.abs(do2-P.f2)<1){
+    info.textContent='Pow: '+(m1).toFixed(2)+'× po L₁ | Obraz końcowy: \u221E (układ afokalny)';
+    return;
+  }
+  const di2=P.f2*do2/(do2-P.f2);
+  const m2=-di2/do2;
+  const M=m1*m2;
+  let t='Pow: '+M.toFixed(2)+'× | ';
+  t+=di2>0?'Rzeczywisty':'Pozorny';
+  t+=', '+(M>0?'prosty':'odwrócony');
+  t+=' | Obraz: '+di2.toFixed(0)+' od L\u2082';
+  const delta=P.y-di2;
+  if(Math.abs(delta)<5) t+=' \u2714 ostry';
+  else t+=' (ekran '+(delta>0?'+':'')+delta.toFixed(0)+')';
+  info.textContent=t;
+}
+
+/* --- main draw --- */
+function draw(){
+  if(!CW)return;
+  const srcX=-P.x, scrX=P.d+P.y;
+  const sources=[[srcX,SH],[srcX,-SH]];
+  const baseCols=['rgba(255,180,50,0.85)','rgba(80,180,255,0.85)'];
+  const chrShifts=[
+    {c:'rgba(255,60,60,0.7)',k:1.05},
+    {c:'rgba(60,220,60,0.7)',k:1.00},
+    {c:'rgba(60,100,255,0.75)',k:0.95}
+  ];
+
+  // trace all rays
+  const groups=[];
+  const allPts=[];
+  sources.forEach(([sx,sy],si)=>{
+    if(chr){
+      chrShifts.forEach(({c:col,k})=>{
+        const rays=threeRays(sx,sy,P.f1*k,P.f2*k,scrX);
+        groups.push({rays,color:col,lw:1.3});
+        rays.forEach(r=>allPts.push(...r));
+      });
+    } else {
+      const rays=threeRays(sx,sy,P.f1,P.f2,scrX);
+      groups.push({rays,color:baseCols[si],lw:1.6});
+      rays.forEach(r=>allPts.push(...r));
+    }
+  });
+
+  setupView(allPts);
+
+  // background
+  c.fillStyle='#080810';c.fillRect(0,0,CW,CH);
+  // subtle vignette
+  const grad=c.createRadialGradient(CW/2,CH/2,CH*0.2,CW/2,CH/2,CW*0.7);
+  grad.addColorStop(0,'rgba(15,15,40,0)');
+  grad.addColorStop(1,'rgba(0,0,0,0.4)');
+  c.fillStyle=grad;c.fillRect(0,0,CW,CH);
+
+  drawAxis();
+
+  // dimension annotations
+  drawDim(srcX,0,'x = '+P.x);
+  drawDim(0,P.d,'d = '+P.d);
+  drawDim(P.d,scrX,'y = '+P.y);
+
+  // screen
+  drawScreen(scrX);
+
+  // lenses
+  drawLens(0,P.f1,'L\u2081 (f\u2081='+P.f1+')');
+  drawLens(P.d,P.f2,'L\u2082 (f\u2082='+P.f2+')');
+
+  // focal points
+  drawFocal(-P.f1,'F\u2081','#bb44aa');
+  drawFocal(P.f1,"F\u2081'",'#bb44aa');
+  drawFocal(P.d-P.f2,'F\u2082','#44aabb');
+  drawFocal(P.d+P.f2,"F\u2082'",'#44aabb');
+
+  // rays
+  groups.forEach(({rays,color,lw})=>{rays.forEach(r=>drawRayPath(r,color,lw))});
+
+  // image on screen
+  drawImageSpots(groups,scrX);
+
+  // sources (drawn last so they're on top)
+  drawSource(srcX,SH);
+  drawSource(srcX,-SH);
+
+  // source label
+  const[lsx,lsy]=ts(srcX,SH);
+  c.fillStyle='#ffaa33';c.font='12px sans-serif';c.textAlign='right';
+  c.fillText('Źródło',lsx-12,lsy-5);
+
+  // screen label
+  const[scx,scy]=ts(scrX,100);
+  c.fillStyle='#555577';c.font='12px sans-serif';c.textAlign='left';
+  c.fillText('Ekran',scx+8,scy);
+
+  updateInfo();
+}
+
+resize();
+})();
+</script>
+</body>
+</html>
